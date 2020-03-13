@@ -11,37 +11,45 @@ import ipaddress
 import socket
 import struct
 
+# Specially crafted packet
 SMB_PACKET = b'\x00\x00\x00\xc0\xfeSMB@\x00\x00\x00\x00\x00\x00\x00\x00\x00\x1f\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00$\x00\x08\x00\x01\x00\x00\x00\x7f\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00x\x00\x00\x00\x02\x00\x00\x00\x02\x02\x10\x02"\x02$\x02\x00\x03\x02\x03\x10\x03\x11\x03\x00\x00\x00\x00\x01\x00&\x00\x00\x00\x00\x00\x01\x00 \x00\x01\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x03\x00\n\x00\x00\x00\x00\x00\x01\x00\x00\x00\x01\x00\x00\x00\x01\x00\x00\x00\x00\x00\x00\x00'
 
-def _scan(ip, timeout=3, verbose=False):
+def scan(ip, timeout=3, verbose=False):
+    # Create socket with timeout
     sock = socket.socket(socket.AF_INET)
     sock.settimeout(timeout)
 
+    # Attempt to connect to host on SMB port
     try:
         sock.connect((ip, 445))
     except:
         sock.close()
         if verbose:
-            print("%s -- UNREACHABLE" % ip)
+            print("%s\tUNREACHABLE" % ip)
         return
 
+    # Attempt to send packet and read response
+    # This can occassionally fail, for some reason...
     try:
         sock.send(SMB_PACKET)
         nb, = struct.unpack(">I", sock.recv(4))
         res = sock.recv(nb)
     except Exception as e:
-        print("%s -- ERROR (%s)" % (ip, str(e)))
+        print("%s\tERROR (%s)" % (ip, str(e)))
         return
 
+    # Check if vulnerability exists in response
     if res[68:70] != b"\x11\x03" or res[70:72] != b"\x02\x00":
-        print("%s -- NOT VULNERABLE" % ip)
+        print("%s\tPATCHED" % ip)
     else:
-        print("%s -- VULNERABLE" % ip)
+        print("%s\tVULNERABLE" % ip)
 
-def scan(queue):
+def _scan(queue):
+    # Each threat will run forever and eventually stop
+    # when the main thread is killed
     while True:
         ip, timeout, verbose = queue.get()
-        _scan(ip, timeout, verbose)
+        scan(ip, timeout, verbose)
         queue.task_done()
 
 def main(args):
@@ -50,12 +58,15 @@ def main(args):
 
     # Create threads
     for _ in range(args.threads):
-        thread = Thread(target=scan, args=(queue,))
+        thread = Thread(target=_scan, args=(queue,))
         thread.setDaemon(True)
         thread.start()
 
+    # Add IPs to queue
     for ip in ipaddress.ip_network(args.subnet):
         queue.put((str(ip), args.timeout, args.verbose))
+
+    # Wait for Queue to finish
     queue.join()
 
 
